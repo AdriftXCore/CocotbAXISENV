@@ -21,7 +21,7 @@ TOPLEVEL = $(tc)
 
 # MODULE is the basename of the Python test file
 export PYTHONPATH := $(PYTHONPATH):$(PWD)/..
-MODULE = tb.cocotb_top
+MODULE = tb.$(ctb)
 
 # 指定VCS编译选项
 EXTRA_ARGS += -full64 -cpp g++-4.8 -cc gcc-4.8 -LDFLAGS "-Wl,--no-as-needed" -debug_access+all +incdir+${include_list} -f $(abspath ./filelist.f)
@@ -79,5 +79,5 @@ verdi:
 				+v2k \
 				$(tb_files) \
 				-F ./filelist.f \
-				-ssf *.fsdb \
+				-ssf tb_top.fsdb \
 				-nologo &
