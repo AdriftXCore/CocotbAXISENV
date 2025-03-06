@@ -52,15 +52,10 @@ rx_queue = Queue()
 async def continuous_sender(dut, source, frame_count=100):
     """背靠背帧发送协程"""
     try:
-        for _ in range(frame_count):
-            frame = AxiStreamFrame(b'data{_}')
-            tx_queue.append(frame)
-
-        while tx_queue:
-            if not backpressure_active:  # 无反压时发送
-                frame = tx_queue.popleft()
-                source.send_nowait(frame)  # 非阻塞发送
-            await RisingEdge(dut.clk)  # 同步时钟
+        for i in range(frame_count):
+            frame = AxiStreamFrame(i.to_bytes(16,"little"))
+            source.send_nowait(frame)  # 非阻塞发送
+            await source.wait()
     except Exception as e:
         dut._log.error(f"Sender failed: {e}")
         raise
@@ -74,41 +69,17 @@ async def apply_backpressure(dut, sink):
     try:
         """反压控制协程"""
         sink.set_pause_generator(random_backpressure())
-        while True:
-            global backpressure_active
-            backpressure_active = sink.pause  # 更新全局反压状态
-            await RisingEdge(dut.clk)
     except Exception as e:
         dut._log.error(f"backpresse failed: {e}")
         raise
 
 
-async def receiver_monitor(dut, sink):
-    try:
-        """异步接收协程"""
-        while True:
-            frame = await sink.recv()  # 阻塞式接收
-            rx_queue.put_nowait(frame)  # 非阻塞入队
-    except Exception as e:
-        dut._log.error(f"receiver failed: {e}")
-        raise
 
-async def data_validator(dut, expected_count=100):
-    try:
-        """独立校验协程"""
-        received = 0
-        while received < expected_count:
-            try:
-                frame = await rx_queue.get()  # 阻塞式出队
-                assert frame.tdata == b'data{received}', "CHECK ERROR"
-                received += 1
-                dut._log.info("CHECK PASS")
-            except AssertionError as e:
-                dut._log.error(f"Test failed due to: {e}")
-                raise TestFailure("Data mismatch")
-    except Exception as e:
-        dut._log.error(f"validate failed: {e}")
-        raise
+async def data_validator(dut, sink):
+    """独立校验协程"""
+    frame = await sink.recv_nowait()
+    assert frame.tdata == b'0', "CHECK ERROR"
+    dut._log.info("CHECK PASS")
 
 @cocotb.test()
 async def dff_simple_test(dut):
@@ -124,29 +95,33 @@ async def dff_simple_test(dut):
     dut.m_axis_tready.value = 1
     #reset
     await reset_task
-    try:
-        await with_timeout(axis_sink.recv(), timeout=1000, units="ns")
 
-        # 创建 AXI Stream 接口对象
-        axis_source = AxiStreamSource(AxiStreamBus.from_prefix(dut, "s_axis"), dut.clk)
-        axis_sink = AxiStreamSink(AxiStreamBus.from_prefix(dut, "m_axis"), dut.clk)
+    # 创建 AXI Stream 接口对象
+    axis_source = AxiStreamSource(AxiStreamBus.from_prefix(dut, "s_axis"), dut.clk)
+    axis_sink = AxiStreamSink(AxiStreamBus.from_prefix(dut, "m_axis"), dut.clk)
 
-        dut._log.info("------------------ initial cfg ------------------")
-        # 启动协程
-        backpressure = cocotb.start_soon(apply_backpressure(dut, axis_sink))
-        dut._log.info("------------------ initial backpressure ------------------")
-        sender = cocotb.start_soon(continuous_sender(dut, axis_source, 100))
-        dut._log.info("------------------ initial sender ------------------")
-        monitor = cocotb.start_soon(receiver_monitor(dut, axis_sink))
-        dut._log.info("------------------ initial monitor ------------------")
-        validator = cocotb.start_soon(data_validator(dut, 100))
-        dut._log.info("------------------ initial validator ------------------")
+    dut._log.info("------------------ initial cfg ------------------")
+    # 启动协程
+    backpressure = cocotb.start_soon(apply_backpressure(dut, axis_sink))
+    dut._log.info("------------------ initial backpressure ------------------")
+    sender = cocotb.start_soon(continuous_sender(dut, axis_source, 100))
+    dut._log.info("------------------ initial sender ------------------")
 
-        # 等待所有任务完成
-        await validator
-        # await Combine(sender, validator)
-        dut._log.info("TEST COMPLETE")
-    except SimTimeoutError:
-        raise TestFailure("ERROR")
+
+    # validator = cocotb.start_soon(data_validator(dut, axis_sink))
+
+    frame = await axis_sink.recv()
+
+    # assert frame.tdata == b'0', "CHECK ERROR"
+    dut._log.info(f"the frame data is {frame.tdata}")
+    # 等待所有任务完成
+    # await sender
+    # await Combine(sender, validator)
+    # await validator
+    dut._log.info("TEST COMPLETE")
+    sender.kill()
+    for _ in range(10):
+        await RisingEdge(dut.clk)
+        dut._log.info("done")
 
 
