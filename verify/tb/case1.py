@@ -9,7 +9,6 @@ from cocotb.triggers import *
 from cocotbext.axi import AxiStreamBus, AxiStreamSource, AxiStreamSink, AxiStreamFrame
 from collections import deque
 from cocotb.queue import Queue
-from cocotb.result import TestFailure  # 正确导入方式
 
 
 async def generate_clock(dut, cycle, u, n):
@@ -73,13 +72,28 @@ async def apply_backpressure(dut, sink):
         dut._log.error(f"backpresse failed: {e}")
         raise
 
+async def receiver_monitor(dut, sink):
+    try:
+        """异步接收协程"""
+        while True:
+            frame = await sink.recv()  # 阻塞式接收
+            rx_queue.put_nowait(frame)  # 非阻塞入队
+    except Exception as e:
+        dut._log.error(f"receiver failed: {e}")
+        raise
 
-
-async def data_validator(dut, sink):
-    """独立校验协程"""
-    frame = await sink.recv_nowait()
-    assert frame.tdata == b'0', "CHECK ERROR"
-    dut._log.info("CHECK PASS")
+errors = []
+async def data_validator(dut, frame_count=100):
+    result = 0
+    while(result < frame_count):
+        frame = await rx_queue.get()  # 阻塞式出队
+        data = (int.from_bytes(frame.tdata, byteorder='little'))
+        if data != result:
+            errors.append(f"CHECK ERROR, got {data},the result is {hex(result)}")
+            dut._log.error(f"verilate fail :{data},the result is {hex(result)}")
+        else:
+            dut._log.info(f"CHECK PASS receive data is :{data}")
+        result = result + 1
 
 @cocotb.test()
 async def dff_simple_test(dut):
@@ -107,21 +121,18 @@ async def dff_simple_test(dut):
     sender = cocotb.start_soon(continuous_sender(dut, axis_source, 100))
     dut._log.info("------------------ initial sender ------------------")
 
+    monitor = cocotb.start_soon(receiver_monitor(dut, axis_sink))
+    validator = cocotb.start_soon(data_validator(dut, 100))
 
-    # validator = cocotb.start_soon(data_validator(dut, axis_sink))
 
-    frame = await axis_sink.recv()
+    await Combine(sender, validator)
+    dut._log.info("------------------ sender complete------------------")
 
-    # assert frame.tdata == b'0', "CHECK ERROR"
-    dut._log.info(f"the frame data is {frame.tdata}")
-    # 等待所有任务完成
-    # await sender
-    # await Combine(sender, validator)
-    # await validator
+    await RisingEdge(dut.clk)
+    assert len(errors) == 0,"TEST FAIL"
     dut._log.info("TEST COMPLETE")
-    sender.kill()
     for _ in range(10):
         await RisingEdge(dut.clk)
-        dut._log.info("done")
+    dut._log.info("SIMULATE DONE")
 
 
