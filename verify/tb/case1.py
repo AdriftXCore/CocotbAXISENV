@@ -4,14 +4,16 @@ date:2025-03-01 23:02:10
 '''
 import random
 import cocotb
-# from cocotb.triggers import RisingEdge, Timer, Event
+from cocotb.handle import SimHandle
+from typing import Generator
 from cocotb.triggers import *
 from cocotbext.axi import AxiStreamBus, AxiStreamSource, AxiStreamSink, AxiStreamFrame
 from collections import deque
 from cocotb.queue import Queue
 
 
-async def generate_clock(dut, cycle, u, n):
+
+async def generate_clock(dut: SimHandle, cycle: int, u: int, n: int) -> None:
     """Generate clock pulses."""
     if(n == 0):
         while True:
@@ -26,7 +28,7 @@ async def generate_clock(dut, cycle, u, n):
             dut.clk.value = 1
             await Timer(cycle/2, units=u)
 
-async def reset_logic(dut, sync=True, cycles=1):
+async def reset_logic(dut: SimHandle, sync: bool, cycles: int) -> None:
     """支持同步/异步复位的控制函数
     :param sync: True为同步复位（依赖时钟），False为异步复位
     :param cycles: 同步复位时的时钟周期数
@@ -45,10 +47,9 @@ async def reset_logic(dut, sync=True, cycles=1):
         dut.rst_n.value = 1
 
 # 初始化发送队列和反压状态
-tx_queue = deque()
 rx_queue = Queue()
 
-async def continuous_sender(dut, source, frame_count=100):
+async def continuous_sender(dut: SimHandle, source: AxiStreamSource, frame_count: int) -> None:
     """背靠背帧发送协程"""
     try:
         for i in range(frame_count):
@@ -59,20 +60,21 @@ async def continuous_sender(dut, source, frame_count=100):
         dut._log.error(f"Sender failed: {e}")
         raise
 
-def random_backpressure():
+def random_backpressure(n: float,seed: int) -> Generator[bool, None, None]:
     """生成随机反压信号（30%概率触发）"""
+    random.seed(seed)  # 设置种子值
     while True:
-        yield random.random() < 0.3  # 30%概率拉低tready
+        yield random.random() < n  # 30%概率拉低tready
 
-async def apply_backpressure(dut, sink):
+async def apply_backpressure(dut: SimHandle, sink: AxiStreamSink,n: float,seek :int):
     try:
         """反压控制协程"""
-        sink.set_pause_generator(random_backpressure())
+        sink.set_pause_generator(random_backpressure(n,seek))
     except Exception as e:
         dut._log.error(f"backpresse failed: {e}")
         raise
 
-async def receiver_monitor(dut, sink):
+async def receiver_monitor(dut: SimHandle, sink: AxiStreamSink):
     try:
         """异步接收协程"""
         while True:
@@ -83,7 +85,7 @@ async def receiver_monitor(dut, sink):
         raise
 
 errors = []
-async def data_validator(dut, frame_count=100):
+async def data_validator(dut: SimHandle, frame_count: int):
     result = 0
     while(result < frame_count):
         frame = await rx_queue.get()  # 阻塞式出队
@@ -96,7 +98,7 @@ async def data_validator(dut, frame_count=100):
         result = result + 1
 
 @cocotb.test()
-async def dff_simple_test(dut):
+async def axis_simple_test(dut: SimHandle):
     # clock
     await cocotb.start(generate_clock(dut,20,"us",0))
 
@@ -116,23 +118,25 @@ async def dff_simple_test(dut):
 
     dut._log.info("------------------ initial cfg ------------------")
     # 启动协程
-    backpressure = cocotb.start_soon(apply_backpressure(dut, axis_sink))
+    backpressure = cocotb.start_soon(apply_backpressure(dut, axis_sink, 0.3, 44))
     dut._log.info("------------------ initial backpressure ------------------")
     sender = cocotb.start_soon(continuous_sender(dut, axis_source, 100))
     dut._log.info("------------------ initial sender ------------------")
-
     monitor = cocotb.start_soon(receiver_monitor(dut, axis_sink))
+    dut._log.info("------------------ initial monitor ------------------")
     validator = cocotb.start_soon(data_validator(dut, 100))
-
+    dut._log.info("------------------ initial validator ------------------")
 
     await Combine(sender, validator)
     dut._log.info("------------------ sender complete------------------")
 
     await RisingEdge(dut.clk)
     assert len(errors) == 0,"TEST FAIL"
-    dut._log.info("TEST COMPLETE")
+    dut._log.info("------------------ TEST COMPLETE ------------------")
+    backpressure.kill()
+    sender.kill()
+    monitor.kill()
+    validator.kill()
     for _ in range(10):
         await RisingEdge(dut.clk)
-    dut._log.info("SIMULATE DONE")
-
-
+    dut._log.info("------------------ SIMULATE DONE ------------------")
