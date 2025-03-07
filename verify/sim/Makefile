@@ -31,7 +31,7 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
 
 # 默认目标：生成文件列表后启动仿真
 all: clean_all mklist compile elaborate run
-				$(MAKE) sim
+				# $(MAKE) sim
 
 allv: all verdi
 
