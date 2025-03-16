@@ -45,14 +45,11 @@ async def reset_logic(dut: SimHandle, sync: bool, cycles: int) -> None:
         await Timer(100, units="ns")  # 异步复位无需时钟同步
         dut.rst_n.value = 1
 
-# 初始化接收队列
-rx_queue = Queue()
-
 async def continuous_sender(dut: SimHandle, source: AxiStreamSource, frame_count: int,width: int) -> None:
     """背靠背帧发送协程"""
     try:
         for i in range(frame_count):
-            random_len = random.getrandbits(4)
+            random_len = random.getrandbits(9)
             dut._log.info(f"the packet len is {random_len}")
             await gen_packet(dut, source, random_len, width, i )
     except Exception as e:
@@ -118,6 +115,8 @@ async def apply_backpressure(dut: SimHandle, sink: AxiStreamSink,n: float,seek :
         dut._log.error(f"backpresse failed: {e}")
         raise
 
+# 初始化接收队列
+rx_queue = Queue()
 async def receiver_monitor(dut: SimHandle, sink: AxiStreamSink) -> None:
     try:
         """异步接收协程"""
@@ -186,12 +185,8 @@ async def axis_simple_test(dut: SimHandle):
 
     #超时看门狗任务
     watchdog_task = cocotb.start_soon(timeout_watchdog(dut, 1000))
-    try:
-        await Combine(sender, validator)
-        watchdog_task.kill()  # 正常完成时终止监控
-    except SimTimeoutError:
-        raise SimTimeoutError
-    # await Combine(sender, validator)
+
+    await Combine(sender, validator)
     dut._log.info("------------------ sender complete------------------")
 
     await RisingEdge(dut.clk)
@@ -201,6 +196,7 @@ async def axis_simple_test(dut: SimHandle):
     sender.kill()
     monitor.kill()
     validator.kill()
+    watchdog_task.kill()
     for _ in range(10):
         await RisingEdge(dut.clk)
     dut._log.info("------------------ SIMULATE DONE ------------------")
