@@ -52,8 +52,9 @@ async def continuous_sender(dut: SimHandle, source: AxiStreamSource, frame_count
     """背靠背帧发送协程"""
     try:
         for i in range(frame_count):
-            dut._log.info(f"the packet {i}")
-            await gen_packet(dut, source, 2, width, i )
+            random_len = random.getrandbits(4)
+            dut._log.info(f"the packet len is {random_len}")
+            await gen_packet(dut, source, random_len, width, i )
     except Exception as e:
         dut._log.error(f"Sender failed: {e}")
         raise
@@ -63,39 +64,40 @@ async def gen_packet(dut: SimHandle, source: AxiStreamSource, len: int, width: i
         id_num = id.to_bytes(4,"little")
         if(len == 0):
             len = 1
-        for i in range(len):
-            if(len == 1):
-                fdata = random.getrandbits(width).to_bytes(int(width/8),"little")
-                fdata = fdata[:int(width/8)] + id_num
-                frame = AxiStreamFrame(
-                    tdata = fdata,
-                    tuser=0x3
-                )
-                await source.send(frame)
-                dut._log.info(f"the packet data {i}")
-            elif(i == 0):
-                fdata = random.getrandbits(width).to_bytes(int(width/8),"little")
-                fdata = fdata[:12] + id_num
-                frame = AxiStreamFrame(
-                    tdata=fdata, 
-                    tuser=0x2
-                )
-                await source.send(frame)
-                dut._log.info(f"the packet data {i}")
-            elif(i == (len -1)):
-                frame = AxiStreamFrame(
-                    tdata=random.getrandbits(width).to_bytes(int(width/8),"little"), 
-                    tuser=0x1
-                )
-                await source.send(frame)
-                dut._log.info(f"the packet data {i}")
-            else:
-                frame = AxiStreamFrame(
-                    tdata=random.getrandbits(width).to_bytes(int(width/8),"little"), 
-                    tuser=0x0
-                )
-                await source.send(frame)
-                dut._log.info(f"the packet data {i}")
+        if(len == 1):
+            fdata = random.getrandbits(width).to_bytes(int(width/8),"little")
+            fdata = fdata[:(int(width/8) - 4)] + id_num
+            frame = AxiStreamFrame(
+                tdata = fdata,
+                tuser=0x3
+            )
+            await source.send(frame)
+            dut._log.info(f"the packet data tap{0}")
+        else:
+            for i in range(len):
+                if(i == 0):
+                    fdata = random.getrandbits(width).to_bytes(int(width/8),"little")
+                    fdata = fdata[:(int(width/8) - 4)] + id_num
+                    frame = AxiStreamFrame(
+                        tdata=fdata, 
+                        tuser=0x2
+                    )
+                    await source.send(frame)
+                    dut._log.info(f"the packet data tap{i}")
+                elif(i == (len -1)):
+                    frame = AxiStreamFrame(
+                        tdata=random.getrandbits(width).to_bytes(int(width/8),"little"), 
+                        tuser=0x1
+                    )
+                    await source.send(frame)
+                    dut._log.info(f"the packet data tap{i}")
+                else:
+                    frame = AxiStreamFrame(
+                        tdata=random.getrandbits(width).to_bytes(int(width/8),"little"), 
+                        tuser=0x0
+                    )
+                    await source.send(frame)
+                    dut._log.info(f"the packet data tap{i}")
     except Exception as e:
         dut._log.error(f"packet failed: {e}")
         raise
