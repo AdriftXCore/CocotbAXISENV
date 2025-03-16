@@ -46,50 +46,53 @@ async def reset_logic(dut: SimHandle, sync: bool, cycles: int) -> None:
         await Timer(100, units="ns")  # 异步复位无需时钟同步
         dut.rst_n.value = 1
 
-# 初始化发送队列和反压状态
+# 初始化接收队列
 rx_queue = Queue()
 
-async def continuous_sender(dut: SimHandle, source: AxiStreamSource, frame_count: int) -> None:
+async def continuous_sender(dut: SimHandle, source: AxiStreamSource, frame_count: int,width: int) -> None:
     """背靠背帧发送协程"""
     try:
         for i in range(frame_count):
-            # frame = AxiStreamFrame(i.to_bytes(16,"little"))
-            # source.send_nowait(frame)  # 非阻塞发送
             dut._log.info(f"the packet {i}")
-            await gen_packet(dut, source, 2, 128)
+            await gen_packet(dut, source, 2, width, i )
     except Exception as e:
         dut._log.error(f"Sender failed: {e}")
         raise
 
-async def gen_packet(dut: SimHandle, source: AxiStreamSource, len: int, width: int) -> None:
+async def gen_packet(dut: SimHandle, source: AxiStreamSource, len: int, width: int,id: int) -> None:
     try:
+        id_num = id.to_bytes(4,"little")
         if(len == 0):
             len = 1
         for i in range(len):
             if(len == 1):
+                fdata = random.getrandbits(width).to_bytes(int(width/8),"little")
+                fdata = fdata[:int(width/8)] + id_num
                 frame = AxiStreamFrame(
-                    tdata=random.getrandbits(width).to_bytes(16,"little"),
+                    tdata = fdata,
                     tuser=0x3
                 )
                 await source.send(frame)
                 dut._log.info(f"the packet data {i}")
             elif(i == 0):
+                fdata = random.getrandbits(width).to_bytes(int(width/8),"little")
+                fdata = fdata[:12] + id_num
                 frame = AxiStreamFrame(
-                    tdata=random.getrandbits(width).to_bytes(16,"little"), 
+                    tdata=fdata, 
                     tuser=0x2
                 )
                 await source.send(frame)
                 dut._log.info(f"the packet data {i}")
             elif(i == (len -1)):
                 frame = AxiStreamFrame(
-                    tdata=random.getrandbits(width).to_bytes(16,"little"), 
+                    tdata=random.getrandbits(width).to_bytes(int(width/8),"little"), 
                     tuser=0x1
                 )
                 await source.send(frame)
                 dut._log.info(f"the packet data {i}")
             else:
                 frame = AxiStreamFrame(
-                    tdata=random.getrandbits(width).to_bytes(16,"little"), 
+                    tdata=random.getrandbits(width).to_bytes(int(width/8),"little"), 
                     tuser=0x0
                 )
                 await source.send(frame)
@@ -119,23 +122,28 @@ async def receiver_monitor(dut: SimHandle, sink: AxiStreamSink):
         """异步接收协程"""
         while True:
             frame = await sink.recv()  # 阻塞式接收
-            await rx_queue.put(frame)  # 非阻塞入队
+            await rx_queue.put(frame)  # 阻塞入队
     except Exception as e:
         dut._log.error(f"receiver failed: {e}")
         raise
 
 errors = []
-async def data_validator(dut: SimHandle, frame_count: int):
+async def data_validator(dut: SimHandle, frame_count: int,width: int):
     result = 0
     while(result < frame_count):
         frame = await rx_queue.get()  # 阻塞式出队
-        data = (int.from_bytes(frame.tdata, byteorder='little'))
-        if data != result:
-            errors.append(f"CHECK ERROR, got {data},the result is {hex(result)}")
-            dut._log.error(f"verilate fail :{data},the result is {hex(result)}")
-        else:
-            dut._log.info(f"CHECK PASS receive data is :{data}")
-        result = result + 1
+        data = frame.tdata
+        sop  = frame.tuser
+        get_did = int.from_bytes(data[(int(width/8)-4):int(width/8):1],byteorder="little")
+        if((sop == 0x3) or (sop == 0x2)):
+            if (get_did != result):
+                errors.append(f"CHECK ERROR, got {get_did},the result is {result}")
+                dut._log.error(f"verilate fail :{get_did},the result is {result}")
+            else:
+                data = hex(int.from_bytes(data,byteorder="little"))
+                dut._log.info(f"CHECK PASS receive data is :{data}")
+        if((sop == 0x3) or (sop == 0x2)):
+            result = result + 1
 
 @cocotb.test()
 async def axis_simple_test(dut: SimHandle):
@@ -160,18 +168,18 @@ async def axis_simple_test(dut: SimHandle):
     # 启动协程
     backpressure = cocotb.start_soon(apply_backpressure(dut, axis_sink, 0.3, 44))
     dut._log.info("------------------ initial backpressure ------------------")
-    sender = cocotb.start_soon(continuous_sender(dut, axis_source, 100))
+    sender = cocotb.start_soon(continuous_sender(dut, axis_source, 100, 128))
     dut._log.info("------------------ initial sender ------------------")
     monitor = cocotb.start_soon(receiver_monitor(dut, axis_sink))
     dut._log.info("------------------ initial monitor ------------------")
-    validator = cocotb.start_soon(data_validator(dut, 200))
+    validator = cocotb.start_soon(data_validator(dut, 100, 128))
     dut._log.info("------------------ initial validator ------------------")
 
     await Combine(sender, validator)
     dut._log.info("------------------ sender complete------------------")
 
     await RisingEdge(dut.clk)
-    # assert len(errors) == 0,"TEST FAIL"
+    assert len(errors) == 0,f"TEST FAIL,the first error is:{errors[0]},\n the second error is: {errors[1]}"
     dut._log.info("------------------ TEST COMPLETE ------------------")
     backpressure.kill()
     sender.kill()
