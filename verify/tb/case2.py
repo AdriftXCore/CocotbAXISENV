@@ -8,9 +8,8 @@ from cocotb.handle import SimHandle
 from typing import Generator
 from cocotb.triggers import *
 from cocotbext.axi import AxiStreamBus, AxiStreamSource, AxiStreamSink, AxiStreamFrame
-from collections import deque
 from cocotb.queue import Queue
-
+from cocotb.result import SimTimeoutError
 
 
 async def generate_clock(dut: SimHandle, cycle: int, u: int, n: int) -> None:
@@ -145,12 +144,19 @@ async def data_validator(dut: SimHandle, frame_count: int,width: int):
         if((sop == 0x3) or (sop == 0x2)):
             result = result + 1
 
+async def timeout_watchdog(dut, timeout_us):
+    await Timer(timeout_us, 'us')
+    dut._log.error(f"---------------------------------timeout:{timeout_us} us ---------------------------------")
+    raise SimTimeoutError
+
 @cocotb.test()
 async def axis_simple_test(dut: SimHandle):
     # clock
-    await cocotb.start(generate_clock(dut,20,"us",0))
+    await cocotb.start(generate_clock(dut,20,"ns",0))
 
+    #复位
     reset_task = cocotb.start_soon(reset_logic(dut,False,10))
+
     # Set initial input value to prevent it from floating
     dut.s_axis_tdata.value = 0  
     dut.s_axis_tkeep.value = 0  
@@ -175,7 +181,15 @@ async def axis_simple_test(dut: SimHandle):
     validator = cocotb.start_soon(data_validator(dut, 100, 128))
     dut._log.info("------------------ initial validator ------------------")
 
-    await Combine(sender, validator)
+
+    #超时看门狗任务
+    watchdog_task = cocotb.start_soon(timeout_watchdog(dut, 1000))
+    try:
+        await Combine(sender, validator)
+        watchdog_task.kill()  # 正常完成时终止监控
+    except SimTimeoutError:
+        raise SimTimeoutError
+    # await Combine(sender, validator)
     dut._log.info("------------------ sender complete------------------")
 
     await RisingEdge(dut.clk)
