@@ -118,7 +118,7 @@ async def apply_backpressure(dut: SimHandle, sink: AxiStreamSink,n: float,seek :
         dut._log.error(f"backpresse failed: {e}")
         raise
 
-async def receiver_monitor(dut: SimHandle, sink: AxiStreamSink):
+async def receiver_monitor(dut: SimHandle, sink: AxiStreamSink) -> None:
     try:
         """异步接收协程"""
         while True:
@@ -129,7 +129,7 @@ async def receiver_monitor(dut: SimHandle, sink: AxiStreamSink):
         raise
 
 errors = []
-async def data_validator(dut: SimHandle, frame_count: int,width: int):
+async def data_validator(dut: SimHandle, frame_count: int,width: int) -> None:
     result = 0
     while(result < frame_count):
         frame = await rx_queue.get()  # 阻塞式出队
@@ -146,7 +146,7 @@ async def data_validator(dut: SimHandle, frame_count: int,width: int):
         if((sop == 0x3) or (sop == 0x2)):
             result = result + 1
 
-async def timeout_watchdog(dut, timeout_us):
+async def timeout_watchdog(dut: SimHandle, timeout_us: int):
     await Timer(timeout_us, 'us')
     dut._log.error(f"---------------------------------timeout:{timeout_us} us ---------------------------------")
     raise SimTimeoutError
