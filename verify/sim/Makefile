@@ -1,3 +1,7 @@
+verdi_opts = -P $(VERDI_HOME)/share/PLI/VCS/LINUX64/novas.tab $(VERDI_HOME)/share/PLI/VCS/LINUX64/pli.a
+VCS_VIP_SO = $(shell cocotb-config --lib-name-path vpi vcs)
+GLBL_PATH  = /opt/vivado/glbl.v
+
 # Makefile
 ctb = cocotb_top
 tc = tb_top
@@ -11,6 +15,7 @@ include_list = $(abspath ../../design/incl)
 # defaults
 SIM ?= vcs 
 TOPLEVEL_LANG ?= verilog
+PYTEST ?= 0
 
 # use VHDL_SOURCES for VHDL files
 VERILOG_SOURCES += $(tb_files)
@@ -26,12 +31,19 @@ MODULE = tb.$(ctb)
 # 指定VCS编译选项
 EXTRA_ARGS += -full64 -cpp g++-4.8 -cc gcc-4.8 -LDFLAGS "-Wl,--no-as-needed" -debug_access+all +incdir+${include_list} -f $(abspath ./filelist.f)
 
+SIM_ARGS += +vpi -P ./pli.tab -load $(VCS_VIP_SO):cocotbvpi_entry_point
+
 # include cocotb's make rules to take care of the simulator setup
 include $(shell cocotb-config --makefiles)/Makefile.sim
 
 # 默认目标：生成文件列表后启动仿真
+test:
+	pytest $(tb_list)/$(ctb).py -v
+
 all: clean_all mklist compile elaborate run
 				# $(MAKE) sim
+
+allt: clean_all mklist compile elaborate run test
 
 allv: all verdi
 
@@ -51,6 +63,7 @@ compile:
 				+v2k \
 				-full64 \
 				-work xil_defaultlib \
+				$(GLBL_PATH) \
 				+incdir+${include_list} \
 				-sverilog \
 				+define+SIMULATION_EN \
@@ -66,7 +79,8 @@ elaborate:
 				-sverilog \
 			    -debug_acc+all -debug_region+cell+encrypt \
 				$(verdi_opts) \
-				xil_defaultlib.${tc} \
+				xil_defaultlib.${tc} xil_defaultlib.glbl\
+				+vpi -P ./pli.tab -load $(VCS_VIP_SO):cocotbvpi_entry_point \
 				-o simv \
 				2>&1 | tee -a vlogan.log
 
